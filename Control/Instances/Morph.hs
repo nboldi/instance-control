@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, DataKinds, TypeOperators, MultiParamTypeClasses, FlexibleInstances, PolyKinds, UndecidableInstances, AllowAmbiguousTypes, RankNTypes, ScopedTypeVariables, FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies, DataKinds, TypeOperators, MultiParamTypeClasses, FlexibleInstances, PolyKinds, UndecidableInstances, AllowAmbiguousTypes, RankNTypes, ScopedTypeVariables, FlexibleContexts, OverlappingInstances #-}
 
 module Control.Instances.Morph where
 
@@ -12,8 +12,8 @@ import Control.Instances.TypeLevelPrelude
 class Morph x y where
   repr :: x a -> y a
   
-instance (fl ~ (ShortestMorph DB x y), Morph' fl x y) => Morph x y where
-  repr = repr' (undefined :: fl) -- generateMorph
+instance (fl ~ (ShortestMorph (ToMorphRepo DB) x y), GeneratableMorph DB fl, Morph' fl x y) => Morph x y where
+  repr = repr' (generateMorph db :: fl)
   
 class Morph' fl x y where
   repr' :: fl -> x a -> y a
@@ -26,32 +26,56 @@ instance Morph' CloseMorph x x where
   
 
 data DBRepoAdd a b r = DBRepoAdd (forall x . a x -> b x) r
+
+infixr 6 :+:
+data a :+: r = a :+: r 
+
 data EmptyDBRepo = EmptyDBRepo
   
 type family ToMorphRepo db where
-  ToMorphRepo (DBRepoAdd a b r) = ConnectMorph a b ': ToMorphRepo r
+  ToMorphRepo (cm :+: r) = cm ': ToMorphRepo r
   ToMorphRepo EmptyDBRepo = '[]
-
+ 
+db :: DB 
+db = ConnectMorph (return . runIdentity) 
+       :+: ConnectMorph (return . runIdentity) 
+       :+: ConnectMorph (MaybeT . return) 
+       :+: ConnectMorph (maybeToList) 
+       :+: ConnectMorph (ListT . return) 
+       :+: ConnectMorph (ListT . liftM maybeToList . runMaybeT) 
+       :+: EmptyDBRepo
   
-type DB = '[ ConnectMorph Identity Maybe
-           , ConnectMorph Identity IO
-           , ConnectMorph Maybe (MaybeT IO)
-           , ConnectMorph Maybe [] 
-           , ConnectMorph [] (ListT IO)
-           , ConnectMorph (MaybeT IO) (ListT IO)
-           ]
+class GeneratableMorph db ch where
+  generateMorph :: db -> ch
+instance GeneratableMorph db CloseMorph where
+  generateMorph db = CloseMorph
+instance (HasMorph db a b, GeneratableMorph db r) 
+      => GeneratableMorph db (MorphStep a b r) where
+  generateMorph db = MorphStep (fromConnectMorph $ getMorph db) (generateMorph db)
+  
+class HasMorph r a b where 
+  getMorph :: r -> ConnectMorph a b
+instance HasMorph (ConnectMorph a b :+: r) a b where
+  getMorph (c :+: r) = c
+instance HasMorph r a b => HasMorph (c :+: r) a b where
+  getMorph (c :+: r) = getMorph r
+  
+type DB = ConnectMorph Identity Maybe
+           :+: ConnectMorph Identity IO
+           :+: ConnectMorph Maybe (MaybeT IO)
+           :+: ConnectMorph Maybe [] 
+           :+: ConnectMorph [] (ListT IO)
+           :+: ConnectMorph (MaybeT IO) (ListT IO)
+           :+: EmptyDBRepo
 
 -- | A simple connection between two types
-data ConnectMorph m1 m2 = ConnectMorph (forall a . m1 a -> m2 a)
+data ConnectMorph m1 m2 = ConnectMorph { fromConnectMorph :: forall a . m1 a -> m2 a }
   
 -- | Records that a given type is already visited by instance search
 data VisitedType (m :: * -> *)
 
-class GeneratedMorph db m where
-  generateMorph :: db -> m
-
 data MorphStep a b r = MorphStep (forall x . a x -> b x) r
-data CloseMorph
+data CloseMorph = CloseMorph
   
 
 type family FilterIsMorphFrom (m :: * -> *) (ls :: [k]) :: [k] where
@@ -91,6 +115,5 @@ type family ConcatMapContinueMorph h r b ls where
   ConcatMapContinueMorph h r b (c ': ls) = ContinueMorph h r b c :++: ConcatMapContinueMorph h r b ls
   ConcatMapContinueMorph h r b '[] = '[]
          
-
 
 
