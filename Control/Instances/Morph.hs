@@ -11,8 +11,15 @@ import GHC.TypeLits
 class Morph x y where
   repr :: x a -> y a
   
+<<<<<<< HEAD
 instance (fl ~ (ShortestMorph DB x y), Morph' fl x y) => Morph x y where
   repr = repr' (undefined :: fl) -- generateMorph
+=======
+-- instance (fl ~ (ShortestMorph DB x y), Morph' fl x y) => Morph x y where
+  -- repr = repr' (undefined :: fl)
+instance (fl ~ (ShortestMorph DB x y), Morph' fl x y) => Morph x y where
+  repr = repr' undefined -- generateMorph
+>>>>>>> 9eec46d106c172a0a3216b6d6eb66fd2cd92eff7
   
 class Morph' fl x y where
   repr' :: fl -> x a -> y a
