@@ -9,6 +9,16 @@ import Data.Maybe
 import GHC.TypeLits
 import Control.Instances.TypeLevelPrelude
 
+test1 :: IO String
+test1 = repr (Identity "alma")
+
+test2 :: [String]
+test2 = repr (Just "alma")
+
+test3 :: ListT IO String
+test3 = repr (Just "alma")
+
+
 class Morph x y where
   repr :: x a -> y a
   
@@ -18,40 +28,56 @@ instance (fl ~ (ShortestMorph (ToMorphRepo DB) x y), GeneratableMorph DB fl, Mor
 class Morph' fl x y where
   repr' :: fl -> x a -> y a
   
-instance Morph' r y z => Morph' (MorphStep x y r) x z where
-  repr' (MorphStep m r) = repr' r . m
+instance Morph' r y z => Morph' (ConnectMorph x y :+: r) x z where
+  repr' (ConnectMorph m :+: r) = repr' r . m
+ 
+instance (Morph' r m x, Monad m) => Morph' (IdentityMorph m :+: r) Identity x where
+  repr' (IdentityMorph :+: r) = (repr' r :: forall a . m a -> x a) . return . runIdentity
   
-instance Morph' CloseMorph x x where
+instance Morph' (MUMorph m :+: r) m MU where
+  repr' (MUMorph :+: _) = const MU
+ 
+instance Morph' NoMorph x x where
   repr' fl = id
   
-
 data DBRepoAdd a b r = DBRepoAdd (forall x . a x -> b x) r
 
 infixr 6 :+:
 data a :+: r = a :+: r 
 
-data EmptyDBRepo = EmptyDBRepo
+data NoMorph = NoMorph
   
 type family ToMorphRepo db where
   ToMorphRepo (cm :+: r) = cm ': ToMorphRepo r
-  ToMorphRepo EmptyDBRepo = '[]
+  ToMorphRepo NoMorph = '[]
+ 
+  
+type DB = ConnectMorph Maybe (MaybeT IO)
+           :+: ConnectMorph Maybe [] 
+           :+: ConnectMorph [] (ListT IO)
+           :+: ConnectMorph (MaybeT IO) (ListT IO)
+           :+: NoMorph
  
 db :: DB 
-db = ConnectMorph (return . runIdentity) 
-       :+: ConnectMorph (return . runIdentity) 
-       :+: ConnectMorph (MaybeT . return) 
+db = ConnectMorph (MaybeT . return) 
        :+: ConnectMorph (maybeToList) 
        :+: ConnectMorph (ListT . return) 
        :+: ConnectMorph (ListT . liftM maybeToList . runMaybeT) 
-       :+: EmptyDBRepo
+       :+: NoMorph
   
 class GeneratableMorph db ch where
   generateMorph :: db -> ch
-instance GeneratableMorph db CloseMorph where
-  generateMorph db = CloseMorph
+instance GeneratableMorph db NoMorph where
+  generateMorph _ = NoMorph
+instance GeneratableMorph db r 
+      => GeneratableMorph db (IdentityMorph m :+: r) where
+  generateMorph db = IdentityMorph :+: generateMorph db
+instance GeneratableMorph db r 
+      => GeneratableMorph db (MUMorph m :+: r) where
+  generateMorph db = MUMorph :+: generateMorph db
 instance (HasMorph db a b, GeneratableMorph db r) 
-      => GeneratableMorph db (MorphStep a b r) where
-  generateMorph db = MorphStep (fromConnectMorph $ getMorph db) (generateMorph db)
+      => GeneratableMorph db (ConnectMorph a b :+: r) where
+  generateMorph db = getMorph db :+: generateMorph db
   
 class HasMorph r a b where 
   getMorph :: r -> ConnectMorph a b
@@ -59,23 +85,17 @@ instance HasMorph (ConnectMorph a b :+: r) a b where
   getMorph (c :+: r) = c
 instance HasMorph r a b => HasMorph (c :+: r) a b where
   getMorph (c :+: r) = getMorph r
-  
-type DB = ConnectMorph Identity Maybe
-           :+: ConnectMorph Identity IO
-           :+: ConnectMorph Maybe (MaybeT IO)
-           :+: ConnectMorph Maybe [] 
-           :+: ConnectMorph [] (ListT IO)
-           :+: ConnectMorph (MaybeT IO) (ListT IO)
-           :+: EmptyDBRepo
 
 -- | A simple connection between two types
 data ConnectMorph m1 m2 = ConnectMorph { fromConnectMorph :: forall a . m1 a -> m2 a }
+
+data MU a = MU
+
+data IdentityMorph m = IdentityMorph
+data MUMorph m = MUMorph
   
 -- | Records that a given type is already visited by instance search
 data VisitedType (m :: * -> *)
-
-data MorphStep a b r = MorphStep (forall x . a x -> b x) r
-data CloseMorph = CloseMorph
   
 
 type family FilterIsMorphFrom (m :: * -> *) (ls :: [k]) :: [k] where
@@ -99,12 +119,14 @@ type family ShortestMorph db a b where
   ShortestMorph db a b = ToMorphStep (MinByCmpLen (GenMorph '[] db a b))
           
 type family ToMorphStep ls where
-  ToMorphStep '[] = CloseMorph
-  ToMorphStep (ConnectMorph a b ': ls) = MorphStep a b (ToMorphStep ls)
+  ToMorphStep '[] = NoMorph
+  ToMorphStep (c ': ls) = c :+: ToMorphStep ls
 
 
 type family GenMorph h r a b :: [[*]] where
   GenMorph h r a a = '[ '[] ]
+  GenMorph h r Identity a = '[ '[ IdentityMorph a ] ]
+  GenMorph h r a MU = '[ '[ MUMorph a ] ]
   GenMorph h r a b = ConcatMapContinueMorph h r b (FilterNotElem h (FilterIsMorphFrom a r))
   
 type family ContinueMorph (h :: [*]) (r :: [*]) (b :: * -> *) (mr :: *) :: [[*]] where
