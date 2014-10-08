@@ -24,3 +24,7 @@ type family Length ls :: Nat where
 type family MapAppend e lls where
   MapAppend e (ls ': lls) = (e ': ls) ': MapAppend e lls
   MapAppend e '[] = '[]
+  
+type family Revert ls where
+  Revert '[] = '[]
+  Revert (e ': ls) = Revert ls :++: '[ e ]
