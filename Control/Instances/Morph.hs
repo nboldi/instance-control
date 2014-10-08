@@ -5,6 +5,7 @@ module Control.Instances.Morph where
 import Control.Monad.Identity
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.List
+import Control.Monad.State
 import Data.Maybe
 import GHC.TypeLits
 import Control.Instances.TypeLevelPrelude
@@ -20,6 +21,9 @@ test3 = repr (Just "alma")
 
 test4 :: MaybeT IO String
 test4 = repr (Just "alma")
+
+test5 :: Monad m => ListT (StateT s m) String
+test5 = repr (Just "alma")
 
 
 class Morph x y where
@@ -59,14 +63,14 @@ type family ToMorphRepo db where
    
 type DB = ConnectMorph_2m Maybe MaybeT
            :+: ConnectMorph Maybe [] 
-           :+: ConnectMorph [] (ListT IO)
+           :+: ConnectMorph_2m [] ListT
            :+: ConnectMorph (MaybeT IO) (ListT IO)
            :+: NoMorph
  
 db :: DB 
 db = ConnectMorph_2m (MaybeT . return) 
        :+: ConnectMorph (maybeToList) 
-       :+: ConnectMorph (ListT . return) 
+       :+: ConnectMorph_2m (ListT . return) 
        :+: ConnectMorph (ListT . liftM maybeToList . runMaybeT) 
        :+: NoMorph
   
@@ -98,7 +102,7 @@ data ConnectMorph m1 m2 = ConnectMorph { fromConnectMorph :: forall a . m1 a -> 
 data ConnectMorph_2m m1 m2 = ConnectMorph_2m { fromConnectMorph_2m :: forall a k . Monad k => m1 a -> m2 k a }
 
 data Simple (a :: * -> *)
-data Forall1M (a :: (* -> *) -> * -> *)
+data Forall1 (a :: k -> * -> *)
 
 data MU a = MU
 
@@ -108,14 +112,21 @@ data MUMorph m = MUMorph
 -- | Records that a given type is already visited by instance search
 data VisitedType (m :: * -> *)
   
+type family GetMorphSource c :: * where
+  GetMorphSource (ConnectMorph m m') = Simple m
+  GetMorphSource (ConnectMorph_2m m m') = Simple m
+  
+type family MatchMorph (m1 :: *) (m2 :: *) :: Bool where
+  MatchMorph m m = True
+  MatchMorph (Forall1 k) (Simple (k x)) = True
+  MatchMorph (Simple (k x)) (Forall1 k) = True
+  MatchMorph m1 m2 = False
 
-type family FilterIsMorphFrom (m :: *) (ls :: [k]) :: [k] where
+type family FilterIsMorphFrom (m :: *) (ls :: [*]) :: [*] where
   FilterIsMorphFrom m '[] = '[]
-  FilterIsMorphFrom (Simple m) ((ConnectMorph m m') ': ls) = (ConnectMorph m m') ': FilterIsMorphFrom (Simple m) ls
-  FilterIsMorphFrom (Forall1M k) ((ConnectMorph (k x) m') ': ls) = (ConnectMorph (k x) m') ': FilterIsMorphFrom (Forall1M k) ls
-  FilterIsMorphFrom (Simple m) ((ConnectMorph_2m m m') ': ls) = (ConnectMorph_2m m m') ': FilterIsMorphFrom (Simple m) ls
-  FilterIsMorphFrom (Forall1M k) ((ConnectMorph_2m (k x) m') ': ls) = (ConnectMorph_2m (k x) m') ': FilterIsMorphFrom (Forall1M k) ls
-  FilterIsMorphFrom m (e ': ls) = FilterIsMorphFrom m ls
+  FilterIsMorphFrom m (c ': ls) = IfThenElse (MatchMorph m (GetMorphSource c)) 
+                                             (c ': FilterIsMorphFrom m ls) 
+                                             (FilterIsMorphFrom m ls)
   
 type family FilterNotElem (h :: [k]) (ls :: [k]) :: [k] where
   FilterNotElem h '[] = '[]
@@ -150,8 +161,8 @@ type family ToMorphStep ls where
 
 type family GenMorph h r (a :: *) (b :: *) :: [[*]] where
   GenMorph h r a a = '[ '[] ]
-  GenMorph h r (Simple (k x)) (Forall1M k) = '[ '[] ]
-  GenMorph h r (Forall1M k) (Simple (k x)) = '[ '[] ]
+  GenMorph h r (Simple (k x)) (Forall1 k) = '[ '[] ]
+  GenMorph h r (Forall1 k) (Simple (k x)) = '[ '[] ]
   GenMorph h r (Simple Identity) m = '[ '[ IdentityMorph m ] ]
   GenMorph h r m (Simple MU) = '[ '[ MUMorph m ] ]
   GenMorph h r a b = ConcatMapContinueMorph h r b (FilterNotElem h (FilterIsMorphFrom a r))
@@ -160,7 +171,7 @@ type family ContinueMorph (h :: [*]) (r :: [*]) (b :: *) (mr :: *) :: [[*]] wher
   ContinueMorph h r b (ConnectMorph a x) 
     = MapAppend (ConnectMorph a x) (GenMorph (VisitedType a ': h) r (Simple x) b)
   ContinueMorph h r b (ConnectMorph_2m a x) 
-    = MapAppend (ConnectMorph_2m a x) (GenMorph (VisitedType a ': h) r (Forall1M x) b)
+    = MapAppend (ConnectMorph_2m a x) (GenMorph (VisitedType a ': h) r (Forall1 x) b)
   
 type family ConcatMapContinueMorph h r b ls where
   ConcatMapContinueMorph h r b (c ': ls) = ContinueMorph h r b c :++: ConcatMapContinueMorph h r b ls
