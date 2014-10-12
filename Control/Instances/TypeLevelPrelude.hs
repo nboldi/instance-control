@@ -57,13 +57,21 @@ type family MapAppend e lls where
   MapAppend e (ls ': lls) = (e ': ls) ': MapAppend e lls
   MapAppend e '[] = '[]
   
+type family AppendJust m ls where
+  AppendJust (Just x) ls = x ': ls
+  AppendJust Nothing ls = ls
+  
 type family Revert ls where
   Revert '[] = '[]
   Revert (e ': ls) = Revert ls :++: '[ e ]
   
 type family IfThenJust (p :: Bool) (v :: k) :: Maybe k where
   IfThenJust True v = Just v
-  IfThenJust False v = Nothing   
+  IfThenJust False v = Nothing  
+  
+type family IfJust (p :: Maybe k) (t :: kr) (e :: kr) :: kr where
+  IfJust (Just x) t e = t
+  IfJust Nothing t e = e
   
 type family IsJust (p :: Maybe k) :: Bool where
   IsJust (Just x) = True
