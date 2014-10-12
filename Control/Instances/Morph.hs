@@ -11,20 +11,20 @@ import Data.Proxy
 import GHC.TypeLits
 import Control.Instances.TypeLevelPrelude
 
-test1 :: Identity a -> IO a
-test1 = morph
+-- test1 :: Identity a -> IO a
+-- test1 = morph
 
-test2 :: Maybe a -> [a]
-test2 = morph
+-- test2 :: Maybe a -> [a]
+-- test2 = morph
 
-test3 :: Maybe a -> ListT IO a
-test3 = morph
+-- test3 :: Maybe a -> ListT IO a
+-- test3 = morph
 
-test4 :: Maybe a -> MaybeT IO a
-test4 = morph
+-- test4 :: Maybe a -> MaybeT IO a
+-- test4 = morph
 
-test5 :: Monad m => Maybe a -> ListT (StateT s m) a
-test5 = morph
+-- test5 :: Monad m => Maybe a -> ListT (StateT s m) a
+-- test5 = morph
 
 -- test6 :: Monad m => m a -> MaybeT m a
 -- test6 = morph
@@ -42,13 +42,12 @@ test5 = morph
 --
 class Morph (m1 :: * -> *) (m2 :: * -> *) where
   -- | Lifts the first monad into the second.
-  morph :: m1 a -> m2 a
   
-instance ( fl ~ (ShortestMorph (ToMorphRepo DB) x y)
-         , GeneratableMorph DB fl
-         , Morph' fl x y
-         ) => Morph x y where
-  morph = repr (generateMorph db :: fl)
+-- instance ( fl ~ (MorphPath (ToMorphRepo DB) x y)
+         -- , GeneratableMorph DB fl
+         -- , Morph' fl x y
+         -- ) => Morph x y where
+  -- morph = repr (generateMorph db :: fl)
   
 class Morph' fl x y where
   repr :: fl -> x a -> y a
@@ -75,7 +74,7 @@ type family ToMorphRepo db where
   ToMorphRepo NoMorph = '[]
    
 type DB = ConnectMorph_2m Maybe MaybeT
-           -- :+: ConnectMorph_mt MaybeT 
+           :+: ConnectMorph_mt MaybeT 
            :+: ConnectMorph Maybe [] 
            :+: ConnectMorph_2m [] ListT
            :+: ConnectMorph (MaybeT IO) (ListT IO)
@@ -83,7 +82,7 @@ type DB = ConnectMorph_2m Maybe MaybeT
  
 db :: DB 
 db = ConnectMorph_2m (MaybeT . return) 
-       -- :+: ConnectMorph_mt (MaybeT . liftM Just) 
+       :+: ConnectMorph_mt (MaybeT . liftM Just) 
        :+: ConnectMorph (maybeToList) 
        :+: ConnectMorph_2m (ListT . return) 
        :+: ConnectMorph (ListT . liftM maybeToList . runMaybeT) 
@@ -126,79 +125,69 @@ data Forall1 (a :: k -> * -> *)
 data IdentityMorph m = IdentityMorph
 data MUMorph m = MUMorph
   
+
+--  TODO : construct the path backward, from the target type to the source (in a non-increasing manner)  
+--           OR maybe use symbols instead of type functions with an apply function (could this work???) (continuations???)
+  
+type family MorphPath e s t where
+  MorphPath e s t = {- PathFromList (Revert (ConcretizePath ( -} ShortestPath e (Simple s) (Simple t) {- ))) -}
+  
+type family ShortestPath (e :: [*]) (s :: *) (t :: *) :: [*] where
+  ShortestPath e s t = ShortestPath' e s '[ '[t] ]
+  
+type family ShortestPath' (e :: [*]) (t :: *) (c :: [[*]]) :: [*] where
+  ShortestPath' e t c = IfThenElse (Null (FilterHead t c)) 
+                                   (ShortestPath' e t (ApplyEdges e c c)) 
+                                   (Head ((FilterHead t c)))
+  
+type family FilterHead h ls where
+  FilterHead h (l ': lls) = IfThenElse (MatchType (Head l) h) 
+                                       (l ': FilterHead h lls) 
+                                       (FilterHead h lls)
+  FilterHead h '[] = '[]
+
+type family ApplyEdges (e :: [*]) (co :: [[*]]) (c :: [[*]]) :: [[*]] where
+  ApplyEdges (e ': es) co (c ': cs) 
+    = IfThenElse (IsJust (ApplyEdge e (Head c))) 
+                 ((FromJust (ApplyEdge e (Head c)) ': e ': c) ': ApplyEdges (e ': es) co cs)
+                 (ApplyEdges (e ': es) co cs)
+  ApplyEdges (e ': es) co '[] = ApplyEdges es co co
+  ApplyEdges '[] co cr = '[]  
+  
+  
 type family GetMorphSource c :: * where
   GetMorphSource (ConnectMorph m m') = Simple m
   GetMorphSource (ConnectMorph_2m m m') = Simple m
   GetMorphSource (ConnectMorph_mt mt) = ForAny
     
-type family GetMorphEnd c :: * where
-  GetMorphEnd (ConnectMorph m m') = Simple m'
-  GetMorphEnd (ConnectMorph_2m m mt) = Forall1 mt
-  GetMorphEnd (ConnectMorph_mt mt) = Forall1 mt
+type family ApplyEdge e c :: Maybe * where
+  ApplyEdge (ConnectMorph ms mr) m = IfThenJust (MatchType (Simple ms) m) (Simple mr)
+  ApplyEdge (ConnectMorph_2m ms mt) m = IfThenJust (MatchType (Simple ms) m) (Forall1 mt)
+  ApplyEdge (ConnectMorph_mt mt) (Simple m) = Just (Simple (mt m))
+  ApplyEdge (ConnectMorph_mt mt1) (Forall1 mt2) = Just (Forall1 (Cat mt1 mt2))
+  ApplyEdge (ConnectMorph_mt mt) (ForAny) = Just (Forall1 mt)
+  
+type family MatchType (m1 :: *) (m2 :: *) :: Bool where
+  MatchType m m = True
+  MatchType ForAny m = True
+  MatchType m ForAny = True
+  MatchType (Forall1 k) (Simple (k x)) = True
+  MatchType (Simple (k x)) (Forall1 k) = True
+  MatchType m1 m2 = False
   
 type family MonomorphEnd c v :: * where
   MonomorphEnd (ConnectMorph_2m m m') v = ConnectMorph m v
   MonomorphEnd (ConnectMorph_mt t) (t m) = ConnectMorph m (t m)
   MonomorphEnd c v = c
-  
-type family MatchMorph (m1 :: *) (m2 :: *) :: Bool where
-  MatchMorph m m = True
-  MatchMorph ForAny m = True
-  MatchMorph m ForAny = True
-  MatchMorph (Forall1 k) (Simple (k x)) = True
-  MatchMorph (Simple (k x)) (Forall1 k) = True
-  MatchMorph m1 m2 = False
 
-type family FilterIsMorphFrom (m :: *) (ls :: [*]) :: [*] where
-  FilterIsMorphFrom m '[] = '[]
-  FilterIsMorphFrom m (c ': ls) = IfThenElse (MatchMorph m (GetMorphSource c)) 
-                                             (c ': FilterIsMorphFrom m ls) 
-                                             (FilterIsMorphFrom m ls)
+type family ConcretizePath (ls :: [k]) :: [k] where
+  ConcretizePath (Simple h ': c ': x ': r) = MonomorphEnd c h ': GetMorphSource (MonomorphEnd c h) ': ConcretizePath r
+  ConcretizePath '[ h ] = '[]
   
-type family FilterNotElem (h :: [k]) (ls :: [k]) :: [k] where
-  FilterNotElem h '[] = '[]
-  FilterNotElem h (e ': ls) = IfThenElse (Elem e h) (FilterNotElem h ls) (e ': FilterNotElem h ls) 
-          
-type family MinByCmpLen (ls :: [k]) :: k where
-  MinByCmpLen (e ': ls) = MinByCmpLenDef ls e 
-  
-type family MinByCmpLenDef (ls :: [k]) (def :: k) :: k where
-  MinByCmpLenDef '[] def = def
-  MinByCmpLenDef (e ': ls) def = MinByCmpLenDef ls (IfThenElse (Length e <=? Length def) e def)
+type family PathFromList ls where
+  PathFromList '[] = NoMorph
+  PathFromList (c ': ls) = c :+: PathFromList ls
 
-type family ShortestMorph db a b where
-  ShortestMorph db a b = ToMorphStep (Revert (ConcreteMorph b 
-                            (Revert (MinByCmpLen (GenMorph '[] db (Simple a) (Simple b))))))
-
-type family ConcreteMorph b ls where
-  ConcreteMorph b (c ': r) = ConcreteMorphRest (MonomorphEnd c b ': r)
-  ConcreteMorph b ls = ConcreteMorphRest ls
-  
-type family ConcreteMorphRest (ls :: [*]) :: [*] where
-  ConcreteMorphRest '[] = '[]
-  ConcreteMorphRest ((ConnectMorph a b) ': c ': r) 
-    = (ConnectMorph a b) ': ConcreteMorphRest (MonomorphEnd c a ': r)
-  ConcreteMorphRest (e ': ls) = e ': ConcreteMorphRest ls
-  
-type family ToMorphStep ls where
-  ToMorphStep '[] = NoMorph
-  ToMorphStep (c ': ls) = c :+: ToMorphStep ls
-
-
-type family GenMorph h r (a :: *) (b :: *) :: [[*]] where
-  GenMorph h r (Simple Identity) m = '[ '[ IdentityMorph m ] ]
-  GenMorph h r m (Simple Proxy) = '[ '[ MUMorph m ] ]
-  GenMorph h r a b = IfThenElse (MatchMorph a b) '[ '[] ] 
-                       (ConcatMapContinueMorph h r a b 
-                          (FilterNotElem h (FilterIsMorphFrom a r)))
-  
-type family ConcatMapContinueMorph h r (a :: *) (b :: *) ls where
-  ConcatMapContinueMorph h r a b (c ': ls) = ContinueMorph h r a b c :++: ConcatMapContinueMorph h r a b ls
-  ConcatMapContinueMorph h r a b '[] = '[]
-  
-type family ContinueMorph (h :: [*]) (r :: [*]) (a :: *) (b :: *) (mr :: *) :: [[*]] where
-  ContinueMorph h r a b c 
-    = MapAppend c (GenMorph (a ': h) r (GetMorphEnd c) b)
 
          
 
