@@ -26,9 +26,6 @@ test4 = morph
 test5 :: Monad m => Maybe a -> ListT (StateT s m) a
 test5 = morph
 
--- test6 :: Monad m => m a -> MaybeT m a
--- test6 = morph
-
 -- | States that 'm1' can be represented with 'm2'.
 -- That is because 'm2' contains more infromation than 'm1'.
 --
