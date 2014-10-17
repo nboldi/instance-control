@@ -42,6 +42,7 @@ class Morph (m1 :: * -> *) (m2 :: * -> *) where
   morph :: m1 a -> m2 a
   
 instance ( fl ~ (MorphPath (ToMorphRepo DB) x y)
+         , CorrectPath x y fl
          , GeneratableMorph DB fl
          , Morph' fl x y
          ) => Morph x y where
@@ -88,14 +89,18 @@ db = ConnectMorph_2m (MaybeT . return)
   
 class GeneratableMorph db ch where
   generateMorph :: db -> ch
+    
 instance GeneratableMorph db NoMorph where
   generateMorph _ = NoMorph
+  
 instance GeneratableMorph db r 
       => GeneratableMorph db ((IdentityMorph m) :+: r) where
   generateMorph db = IdentityMorph :+: generateMorph db
+  
 instance GeneratableMorph db r 
       => GeneratableMorph db (MUMorph m :+: r) where
   generateMorph db = MUMorph :+: generateMorph db
+  
 instance (HasMorph db (ConnectMorph a b), GeneratableMorph db r) 
       => GeneratableMorph db (ConnectMorph a b :+: r) where
   generateMorph db = getMorph db :+: generateMorph db
@@ -111,6 +116,11 @@ instance Monad k => HasMorph (ConnectMorph_mt t :+: r) (ConnectMorph k (t k)) wh
 instance HasMorph r m => HasMorph (c :+: r) m where
   getMorph (c :+: r) = getMorph r
 
+class CorrectPath from to path
+
+instance CorrectPath from to (a :+: b)
+instance CorrectPath from to NoMorph
+  
 -- | A simple connection between two types
 data ConnectMorph m1 m2 = ConnectMorph { fromConnectMorph :: forall a . m1 a -> m2 a }
 data ConnectMorph_2m m1 m2 = ConnectMorph_2m { fromConnectMorph_2m :: forall a k . Monad k => m1 a -> m2 k a }
