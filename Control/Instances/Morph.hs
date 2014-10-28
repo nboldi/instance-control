@@ -1,6 +1,8 @@
 {-# LANGUAGE TypeFamilies, DataKinds, TypeOperators, MultiParamTypeClasses, FlexibleInstances, PolyKinds, UndecidableInstances, AllowAmbiguousTypes, RankNTypes, ScopedTypeVariables, FlexibleContexts, OverlappingInstances #-}
 
-module Control.Instances.Morph (Morph(..)) where
+module Control.Instances.Morph (GenMorph(..), Morph(..)) where
+
+import Control.Instances.ShortestPath
 
 import Control.Monad.Identity
 import Control.Monad.Trans.Maybe
@@ -10,21 +12,6 @@ import Data.Maybe
 import Data.Proxy
 import GHC.TypeLits
 import Control.Instances.TypeLevelPrelude
-
-test1 :: Identity a -> IO a
-test1 = morph
-
-test2 :: Maybe a -> [a]
-test2 = morph
-
-test3 :: Maybe a -> ListT IO a
-test3 = morph
-
-test4 :: Maybe a -> MaybeT IO a
-test4 = morph
-
-test5 :: Monad m => Maybe a -> ListT (StateT s m) a
-test5 = morph
 
 -- | States that 'm1' can be represented with 'm2'.
 -- That is because 'm2' contains more infromation than 'm1'.
@@ -41,12 +28,21 @@ class Morph (m1 :: * -> *) (m2 :: * -> *) where
   -- | Lifts the first monad into the second.
   morph :: m1 a -> m2 a
   
-instance ( fl ~ (MorphPath (ToMorphRepo DB) x y)
+instance GenMorph DB m1 m2 => Morph m1 m2 where
+  morph = genMorph db
+  
+-- | A generalized version of 'Morph'. Can work on different
+-- rulesets, so this should be used if the ruleset is to be extended.
+class GenMorph db (m1 :: * -> *) (m2 :: * -> *) where
+  -- | Lifts the first monad into the second.
+  genMorph :: db -> m1 a -> m2 a
+  
+instance ( fl ~ (TransformPath (PathFromList (ShortestPath (ToMorphRepo DB) x y)))
          , CorrectPath x y fl
          , GeneratableMorph DB fl
          , Morph' fl x y
-         ) => Morph x y where
-  morph = repr (generateMorph db :: fl)
+         ) => GenMorph DB x y where
+  genMorph db = repr (generateMorph db :: fl)
   
 class Morph' fl x y where
   repr :: fl -> x a -> y a
@@ -69,7 +65,7 @@ data a :+: r = a :+: r
 data NoMorph = NoMorph
   
 type family ToMorphRepo db where
-  ToMorphRepo (cm :+: r) = cm ': ToMorphRepo r
+  ToMorphRepo (cm :+: r) = TranslateConn cm ': ToMorphRepo r
   ToMorphRepo NoMorph = '[]
    
 type DB = ConnectMorph_2m Maybe MaybeT
@@ -87,6 +83,8 @@ db = ConnectMorph_2m (MaybeT . return)
        :+: ConnectMorph (ListT . liftM maybeToList . runMaybeT) 
        :+: NoMorph
   
+-- | This class provides a way to construct the value-level transformations
+-- from the type-level path and a rulebase.
 class GeneratableMorph db ch where
   generateMorph :: db -> ch
     
@@ -105,6 +103,7 @@ instance (HasMorph db (ConnectMorph a b), GeneratableMorph db r)
       => GeneratableMorph db (ConnectMorph a b :+: r) where
   generateMorph db = getMorph db :+: generateMorph db
   
+-- | This class extracts a given morph from the set of rules
 class HasMorph r m where 
   getMorph :: r -> m
 instance HasMorph (m :+: r) m where
@@ -116,74 +115,32 @@ instance Monad k => HasMorph (ConnectMorph_mt t :+: r) (ConnectMorph k (t k)) wh
 instance HasMorph r m => HasMorph (c :+: r) m where
   getMorph (c :+: r) = getMorph r
 
+-- | Checks if the path is found to provide usable error messages
 class CorrectPath from to path
 
 instance CorrectPath from to (a :+: b)
 instance CorrectPath from to NoMorph
-  
--- | A simple connection between two types
+
 data ConnectMorph m1 m2 = ConnectMorph { fromConnectMorph :: forall a . m1 a -> m2 a }
 data ConnectMorph_2m m1 m2 = ConnectMorph_2m { fromConnectMorph_2m :: forall a k . Monad k => m1 a -> m2 k a }
 data ConnectMorph_mt mt = ConnectMorph_mt { fromConnectMorph_mt :: forall a k . Monad k => k a -> mt k a }
 
-data IdentityMorph (m :: * -> *) = IdentityMorph
-data MUMorph m = MUMorph
+-- | Transforms a path element from the generic format to the specific one
+type family TranslateConn m where
+  TranslateConn (ConnectMorph m1 m2) = Connect m1 m2
+  TranslateConn (ConnectMorph_2m m1 m2) = Connect_2m m1 m2
+  TranslateConn (ConnectMorph_mt mt) = Connect_mt mt
   
-data NoPathFound
-
-
-type family MorphPath e s t where
-  MorphPath e s t = PathFromList (ShortestPath e s t)
-  
-type family ShortestPath (e :: [*]) (s :: * -> *) (t :: * -> *) :: [*] where
-  ShortestPath e t t = '[]
-  ShortestPath e Identity t = '[ IdentityMorph t ]
-  ShortestPath e s Proxy = '[ MUMorph s ]
-  ShortestPath e s t = ShortestPath' e s (InitCurrent e t)
-  
-type family ShortestPath' (e :: [*]) (s :: * -> *) (c :: [[*]]) :: [*] where
-  ShortestPath' e s '[] = '[ NoPathFound ]
-  ShortestPath' e s c = FromMaybe (ShortestPath' e s (ApplyEdges e c c))
-                                  (GetFinished s c) 
-                                  
-                                      
-type family GetFinished s c where
-  GetFinished s ((ConnectMorph s b ': p) ': lls) 
-    = Just (ConnectMorph s b ': p)
-  GetFinished s (p ': lls) = GetFinished s lls
-  GetFinished s '[] = Nothing
-
-type family InitCurrent (e :: [*]) (t :: * -> *) :: [[*]] where
-  InitCurrent '[] t = '[]
-  InitCurrent (e ': es) t = IfJust (ApplyEdge e t)
-                                   ('[ MonomorphEnd e t ] ': InitCurrent es t) 
-                                   (InitCurrent es t)
-  
-type family ApplyEdges (e :: [*]) (co :: [[*]]) (c :: [[*]]) :: [[*]] where
-  ApplyEdges (e ': es) co ((ConnectMorph s b ': p) ': cs) 
-    = AppendJust (IfThenJust (IsJust (ApplyEdge e s)) 
-                                (MonomorphEnd e s ': ConnectMorph s b ': p)) 
-                 (ApplyEdges (e ': es) co cs)
-  ApplyEdges (e ': es) co '[] = ApplyEdges es co co
-  ApplyEdges '[] co cr = '[]  
-  
-type family ApplyEdge e t :: Maybe (* -> *) where
-  ApplyEdge (ConnectMorph ms mr) mr = Just ms
-  ApplyEdge (ConnectMorph_2m ms mt) (mt m) = Just ms
-  ApplyEdge (ConnectMorph_mt mt) (mt m) = Just m
-  ApplyEdge e t = Nothing
-
-type family MonomorphEnd c v :: * where
-  MonomorphEnd (ConnectMorph_2m m m') v = ConnectMorph m v
-  MonomorphEnd (ConnectMorph_mt t) (t m) = ConnectMorph m (t m)
-  MonomorphEnd c v = c
+-- | Transforms the path from the generic format to the specific one
+type family TransformPath m where
+  TransformPath (Connect m1 m2 :+: r) = ConnectMorph m1 m2 :+: TransformPath r
+  TransformPath (IdentityMorph m :+: r) = IdentityMorph m :+: TransformPath r
+  TransformPath NoMorph = NoMorph
+  TransformPath NoPathFound = NoPathFound
   
 type family PathFromList ls where
   PathFromList '[] = NoMorph
   PathFromList '[ NoPathFound ] = NoPathFound
   PathFromList (c ': ls) = c :+: PathFromList ls
-
-
-         
 
 
