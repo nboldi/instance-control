@@ -16,18 +16,17 @@ import Control.Instances.TypeLevelPrelude
 data Connect m1 m2
 data Connect_2m m1 m2
 data Connect_mt mt
+data Connect_id m
+data Connect_MU m
 
 -- | Marks that there is no legal path between the two types according
 -- to the rulebase.
 data NoPathFound
-
-data IdentityMorph (m :: * -> *) = IdentityMorph
-data MUMorph m = MUMorph
   
 type family ShortestPath (e :: [*]) (s :: * -> *) (t :: * -> *) :: [*] where
   ShortestPath e t t = '[]
-  ShortestPath e Identity t = '[ IdentityMorph t ]
-  ShortestPath e s Proxy = '[ MUMorph s ]
+  ShortestPath e Identity t = '[ Connect_id t ]
+  ShortestPath e s Proxy = '[ Connect_MU s ]
   ShortestPath e s t = ShortestPath' e s (InitCurrent e t)
   
 type family ShortestPath' (e :: [*]) (s :: * -> *) (c :: [[*]]) :: [*] where

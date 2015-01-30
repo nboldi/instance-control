@@ -124,6 +124,8 @@ instance CorrectPath from to NoMorph
 data ConnectMorph m1 m2 = ConnectMorph { fromConnectMorph :: forall a . m1 a -> m2 a }
 data ConnectMorph_2m m1 m2 = ConnectMorph_2m { fromConnectMorph_2m :: forall a k . Monad k => m1 a -> m2 k a }
 data ConnectMorph_mt mt = ConnectMorph_mt { fromConnectMorph_mt :: forall a k . Monad k => k a -> mt k a }
+data IdentityMorph (m :: * -> *) = IdentityMorph
+data MUMorph m = MUMorph
 
 -- | Transforms a path element from the generic format to the specific one
 type family TranslateConn m where
@@ -134,7 +136,8 @@ type family TranslateConn m where
 -- | Transforms the path from the generic format to the specific one
 type family TransformPath m where
   TransformPath (Connect m1 m2 :+: r) = ConnectMorph m1 m2 :+: TransformPath r
-  TransformPath (IdentityMorph m :+: r) = IdentityMorph m :+: TransformPath r
+  TransformPath (Connect_id m :+: r) = IdentityMorph m :+: TransformPath r
+  TransformPath (Connect_MU m :+: r) = MUMorph m :+: TransformPath r
   TransformPath NoMorph = NoMorph
   TransformPath NoPathFound = NoPathFound
   
