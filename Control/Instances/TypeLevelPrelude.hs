@@ -10,9 +10,9 @@ type family Const a b where
 type family Seq a b where
   Seq a b = b
   
-type family LazyIfThenElse p :: k -> k -> k where
-  LazyIfThenElse True = Const
-  LazyIfThenElse False = Seq
+type family LazyIfThenElse p a b where
+  LazyIfThenElse True a b = a
+  LazyIfThenElse False a b = b
   
 type family Iterate a where
   Iterate a = a ': Iterate a
